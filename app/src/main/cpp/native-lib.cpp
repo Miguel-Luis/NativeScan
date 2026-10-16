@@ -1,6 +1,8 @@
 #include <jni.h>
 #include <android/bitmap.h>
+#include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/core/types.hpp>
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -62,6 +64,116 @@ std::vector<cv::Point> bestQuad(const cv::Mat &binary, double imgArea, double &a
     return best;
 }
 
+// Muestreo bilinear con clamp en bordes.
+inline float sampleBilinear(const cv::Mat &g, float x, float y) {
+    x = std::clamp(x, 0.f, (float) g.cols - 1.001f);
+    y = std::clamp(y, 0.f, (float) g.rows - 1.001f);
+    int ix = (int) x, iy = (int) y;
+    float fx = x - ix, fy = y - iy;
+    const uchar *r0 = g.ptr<uchar>(iy), *r1 = g.ptr<uchar>(iy + 1);
+    return (r0[ix] * (1 - fx) + r0[ix + 1] * fx) * (1 - fy) +
+           (r1[ix] * (1 - fx) + r1[ix + 1] * fx) * fy;
+}
+
+// Un pase de refinamiento subpíxel. Por cada lado muestrea perfiles perpendiculares
+// (paso [step] px, rango ±R px), toma el máximo de gradiente con interpolación parabólica,
+// ajusta recta Huber, recorta residuos atípicos y reajusta por mínimos cuadrados.
+// Reintersecta lados vecinos. q: tl,tr,br,bl en píxeles de [g]. Falso (q intacto) si falla.
+bool refinePass(const cv::Mat &g, std::vector<cv::Point2f> &q, float R, float step, float maxMove) {
+    const int half = std::max(3, (int) std::lround(R / step));
+    const int M = 2 * half + 1;
+    cv::Point2f lp[4], ld[4];
+    std::vector<float> prof(M), grad(M);
+
+    for (int e = 0; e < 4; e++) {
+        cv::Point2f a = q[e], b = q[(e + 1) % 4];
+        cv::Point2f v = b - a;
+        float len = std::hypot(v.x, v.y);
+        if (len < 24.f) return false;
+        cv::Point2f dir = v * (1.f / len), n(-dir.y, dir.x);
+        const int N = std::clamp((int) (len / 3.f), 24, 240);
+
+        std::vector<cv::Point2f> pts;
+        std::vector<int> sgn;
+        pts.reserve(N);
+        for (int k = 0; k < N; k++) {
+            // Evita el 6 % de cada extremo: ahí el lado vecino contamina el perfil.
+            float t = 0.06f + 0.88f * k / (N - 1);
+            cv::Point2f c = a + v * t;
+            for (int i = 0; i < M; i++) {
+                cv::Point2f s = c + n * ((i - half) * step);
+                prof[i] = sampleBilinear(g, s.x, s.y);
+            }
+            int best = -1;
+            float bestScore = 0, bestG = 0;
+            for (int i = 1; i < M - 1; i++) {
+                grad[i] = prof[i + 1] - prof[i - 1];
+                float sc = std::fabs(grad[i]) * (1.f - 0.4f * std::abs(i - half) / (float) half);
+                if (sc > bestScore) { bestScore = sc; best = i; bestG = grad[i]; }
+            }
+            if (best < 2 || best > M - 3 || std::fabs(bestG) < 5.f) continue;
+            float l = std::fabs(grad[best - 1]), m = std::fabs(grad[best]), r = std::fabs(grad[best + 1]);
+            float den = l - 2 * m + r;
+            float off = std::fabs(den) > 1e-3f ? std::clamp(0.5f * (l - r) / den, -0.5f, 0.5f) : 0.f;
+            pts.push_back(c + n * (((best - half) + off) * step));
+            sgn.push_back(bestG > 0 ? 1 : -1);
+        }
+        if (pts.size() < 12) return false;
+        int pos = (int) std::count(sgn.begin(), sgn.end(), 1);
+        int keepSign = pos * 2 >= (int) sgn.size() ? 1 : -1;
+        std::vector<cv::Point2f> use;
+        for (size_t i = 0; i < pts.size(); i++) if (sgn[i] == keepSign) use.push_back(pts[i]);
+        if (use.size() < std::max<size_t>(12, (size_t) N * 2 / 5)) return false;
+
+        cv::Vec4f ln;
+        cv::fitLine(use, ln, cv::DIST_HUBER, 0, 0.01, 0.01);
+        cv::Point2f p0(ln[2], ln[3]), d0(ln[0], ln[1]);
+
+        // Recorte de atípicos por residuo y ajuste final L2.
+        std::vector<float> res(use.size());
+        for (size_t i = 0; i < use.size(); i++)
+            res[i] = std::fabs((use[i].x - p0.x) * d0.y - (use[i].y - p0.y) * d0.x);
+        std::vector<float> sorted = res;
+        std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+        float med = sorted[sorted.size() / 2];
+        float thr = std::max(0.6f, 3.f * med);
+        std::vector<cv::Point2f> inl;
+        for (size_t i = 0; i < use.size(); i++) if (res[i] <= thr) inl.push_back(use[i]);
+        if (inl.size() < std::max<size_t>(10, use.size() * 3 / 5)) return false;
+        cv::fitLine(inl, ln, cv::DIST_L2, 0, 0.01, 0.01);
+        ld[e] = {ln[0], ln[1]};
+        lp[e] = {ln[2], ln[3]};
+    }
+
+    std::vector<cv::Point2f> out(4);
+    for (int e = 0; e < 4; e++) {
+        // Vértice e = intersección del lado e-1 con el lado e.
+        int p = (e + 3) % 4;
+        float cross = ld[p].x * ld[e].y - ld[p].y * ld[e].x;
+        if (std::fabs(cross) < 0.2f) return false;
+        cv::Point2f w = lp[e] - lp[p];
+        float s = (w.x * ld[e].y - w.y * ld[e].x) / cross;
+        out[e] = lp[p] + ld[p] * s;
+        if (std::hypot(out[e].x - q[e].x, out[e].y - q[e].y) > maxMove) return false;
+    }
+    std::vector<cv::Point2f> hull;
+    cv::convexHull(out, hull);
+    if (hull.size() != 4) return false;
+    q = out;
+    return true;
+}
+
+// Pases grueso→fino: cada uno recentra las rectas y reduce el rango y el paso de muestreo.
+// Devuelve true si al menos el primer pase tuvo éxito.
+bool refineQuad(const cv::Mat &g, std::vector<cv::Point2f> &q) {
+    const float diag = std::hypot((float) g.cols, (float) g.rows);
+    const float R0 = std::max(6.f, diag * 0.02f);
+    if (!refinePass(g, q, R0, 1.0f, R0 * 2.5f)) return false;
+    refinePass(g, q, std::max(3.f, diag * 0.005f), 0.5f, R0);
+    refinePass(g, q, std::max(2.f, diag * 0.0015f), 0.25f, R0 * 0.5f);
+    return true;
+}
+
 // gray: 8UC1. Devuelve esquinas normalizadas [0..1] o vacío.
 // Etapa 1: Canny. Etapa 2 (fallback luz difícil/fondo similar): máscara Otsu + cierre.
 std::vector<float> detectQuad(const cv::Mat &gray) {
@@ -97,11 +209,26 @@ std::vector<float> detectQuad(const cv::Mat &gray) {
     if (best.empty()) return {};
 
     auto ordered = orderCorners(best);
+
+    // Refinamiento subpíxel sobre la imagen a resolución de trabajo (<=2400 px).
+    const double ws = std::min(1.0, 2400.0 / std::max(gray.cols, gray.rows));
+    cv::Mat work;
+    if (ws < 1.0) cv::resize(gray, work, cv::Size(), ws, ws, cv::INTER_AREA);
+    else work = gray;
+    cv::Mat smooth;
+    cv::GaussianBlur(work, smooth, cv::Size(3, 3), 0);
+    const float k = (float) work.cols / (float) small.cols;
+    std::vector<cv::Point2f> q(4);
+    for (int i = 0; i < 4; i++) q[i] = ordered[i] * k;
+    if (!refineQuad(smooth, q)) {
+        for (int i = 0; i < 4; i++) q[i] = ordered[i] * k;
+    }
+
     std::vector<float> res;
     res.reserve(8);
-    for (auto &p : ordered) {
-        res.push_back(std::clamp(p.x / (float) small.cols, 0.f, 1.f));
-        res.push_back(std::clamp(p.y / (float) small.rows, 0.f, 1.f));
+    for (auto &p : q) {
+        res.push_back(std::clamp(p.x / (float) work.cols, 0.f, 1.f));
+        res.push_back(std::clamp(p.y / (float) work.rows, 0.f, 1.f));
     }
     return res;
 }
@@ -294,5 +421,40 @@ Java_com_lordprogrammer_nativescan2_NativeScanner_processDocument(
 
     AndroidBitmap_unlockPixels(env, dst);
     AndroidBitmap_unlockPixels(env, src);
+    return JNI_TRUE;
+}
+
+// Luz de asistencia: aclarado gamma adaptativo in-place (una LUT, O(n)). Falso si no hace falta.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_lordprogrammer_nativescan2_NativeScanner_enhanceLowLight(
+        JNIEnv *env, jobject, jobject bitmap) {
+    AndroidBitmapInfo info;
+    void *pixels = nullptr;
+    if (!lockRgba(env, bitmap, info, pixels)) return JNI_FALSE;
+    cv::Mat rgba(info.height, info.width, CV_8UC4, pixels, info.stride);
+
+    // Media de luminancia sobre submuestreo (~4k px): coste despreciable.
+    const int sx = std::max(1, rgba.cols / 64), sy = std::max(1, rgba.rows / 64);
+    double sum = 0;
+    int n = 0;
+    for (int y = 0; y < rgba.rows; y += sy) {
+        const cv::Vec4b *r = rgba.ptr<cv::Vec4b>(y);
+        for (int x = 0; x < rgba.cols; x += sx, n++)
+            sum += 0.299 * r[x][0] + 0.587 * r[x][1] + 0.114 * r[x][2];
+    }
+    const double mean = n ? std::max(sum / n, 1.0) : 128.0;
+    // Lleva la media hacia ~140; gamma acotado para no quemar altas luces.
+    const double gamma = std::clamp(std::log(140.0 / 255.0) / std::log(mean / 255.0), 0.4, 1.0);
+    if (gamma > 0.97) {
+        AndroidBitmap_unlockPixels(env, bitmap);
+        return JNI_FALSE;
+    }
+    cv::Mat lut(1, 256, CV_8U);
+    for (int i = 0; i < 256; i++)
+        lut.at<uchar>(i) = cv::saturate_cast<uchar>(255.0 * std::pow(i / 255.0, gamma));
+    lut.at<uchar>(255) = 255;  // preserva alfa opaco
+    cv::LUT(rgba, lut, rgba);
+
+    AndroidBitmap_unlockPixels(env, bitmap);
     return JNI_TRUE;
 }

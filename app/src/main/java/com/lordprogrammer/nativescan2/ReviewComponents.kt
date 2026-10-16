@@ -80,7 +80,7 @@ fun DocumentQuickActionsBar(
 }
 
 @Composable
-private fun ToolButton(
+internal fun ToolButton(
     icon: ImageVector,
     label: String,
     onClick: () -> Unit,

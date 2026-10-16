@@ -26,6 +26,9 @@ object NativeScanner {
     /** Grados horarios (0/90/180/270) a rotar el bitmap para dejar el texto derecho. */
     external fun detectOrientation(bitmap: Bitmap): Int
 
+    /** Luz de asistencia: aclara in-place un bitmap ARGB_8888 mutable con poca luz. Falso si no hizo falta. */
+    external fun enhanceLowLight(bitmap: Bitmap): Boolean
+
     private external fun processDocument(src: Bitmap, corners: FloatArray, mode: Int, dst: Bitmap): Boolean
 
     /** Corrige perspectiva y aplica filtro. [corners] normalizado a [src]. */

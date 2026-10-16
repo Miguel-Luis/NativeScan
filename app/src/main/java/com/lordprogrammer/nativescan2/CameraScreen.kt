@@ -1,6 +1,19 @@
 package com.lordprogrammer.nativescan2
 
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FlashOff
+import androidx.compose.material.icons.rounded.FlashOn
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.clip
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -61,6 +74,10 @@ fun CameraScreen(vm: ScanViewModel) {
     val executor = remember { Executors.newSingleThreadExecutor() }
     val capturing = remember { AtomicBoolean(false) }
     var live by remember { mutableStateOf<FloatArray?>(null) }
+    var camera by remember { mutableStateOf<Camera?>(null) }
+    var torch by remember { mutableStateOf(false) }
+    val hasFlash = camera?.cameraInfo?.hasFlashUnit() == true
+    LaunchedEffect(camera, torch) { camera?.cameraControl?.enableTorch(torch) }
 
     val capture = rememberUpdatedState {
         if (capturing.compareAndSet(false, true)) {
@@ -125,7 +142,7 @@ fun CameraScreen(vm: ScanViewModel) {
                 it.surfaceProvider = previewView.surfaceProvider
             }
             p.unbindAll()
-            p.bindToLifecycle(
+            camera = p.bindToLifecycle(
                 lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture, analysis,
             )
         }, ContextCompat.getMainExecutor(context))
@@ -138,46 +155,51 @@ fun CameraScreen(vm: ScanViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
-    Box(Modifier.weight(1f).fillMaxWidth()) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(3f / 4f)
-                .align(Alignment.Center),
-        ) {
-            AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-            Canvas(Modifier.fillMaxSize()) {
-                val c = live ?: return@Canvas
-                val path = Path().apply {
-                    for (i in 0 until 4) {
-                        val x = c[i * 2] * size.width
-                        val y = c[i * 2 + 1] * size.height
-                        if (i == 0) moveTo(x, y) else lineTo(x, y)
+        ScreenTopBar(
+            title = "Escanear documento",
+            onBack = { if (vm.pages.isNotEmpty()) vm.show(Screen.REVIEW) else vm.closeDocument() },
+        )
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(3f / 4f)
+                    .align(Alignment.Center),
+            ) {
+                AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+                Canvas(Modifier.fillMaxSize()) {
+                    val c = live ?: return@Canvas
+                    val path = Path().apply {
+                        for (i in 0 until 4) {
+                            val x = c[i * 2] * size.width
+                            val y = c[i * 2 + 1] * size.height
+                            if (i == 0) moveTo(x, y) else lineTo(x, y)
+                        }
+                        close()
                     }
-                    close()
+                    drawPath(path, Accent.copy(alpha = 0.2f), style = Fill)
+                    drawPath(path, Accent, style = Stroke(width = 4.dp.toPx()))
                 }
-                drawPath(path, Accent.copy(alpha = 0.2f), style = Fill)
-                drawPath(path, Accent, style = Stroke(width = 4.dp.toPx()))
             }
         }
-
-        Button(
-            onClick = { capture.value() },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 32.dp),
-        ) { Text("Capturar") }
-
-        if (vm.pages.isNotEmpty()) {
-            Button(
-                onClick = { vm.show(Screen.REVIEW) },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 32.dp),
-            ) { Text("Listo (${vm.pages.size})") }
+        ActionDock {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (hasFlash) {
+                        val scheme = MaterialTheme.colorScheme
+                        ToolButton(
+                            if (torch) Icons.Rounded.FlashOn else Icons.Rounded.FlashOff,
+                            "Luz",
+                            onClick = { torch = !torch },
+                            container = if (torch) scheme.primaryContainer else scheme.surfaceContainerLow,
+                            content = if (torch) scheme.primary else scheme.onSurface,
+                        )
+                    }
+                }
+                ShutterButton(onClick = { capture.value() })
+                Box(Modifier.weight(1f))
+            }
         }
-    }
-    ScanBottomBar(showDocs = true, showScan = false, onDocs = vm::closeDocument, onScan = {})
     }
 }
 

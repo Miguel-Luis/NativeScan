@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">NativeScan2</string>
+    <string name="capture">Capturar</string>
+    <string name="result">Documento escaneado</string>
+    <string name="filter_original">Original</string>
+    <string name="filter_bw">B/N</string>
+    <string name="filter_enhanced">Realce</string>
+    <string name="retake">Repetir</string>
+    <string name="export_pdf">Exportar PDF</string>
+    <string name="permission_denied">Se requiere permiso de cámara</string>
+    <string name="no_document">No se detectó documento; usando toda la imagen</string>
+    <string name="exported">PDF guardado: %1$s</string>
+</resources>

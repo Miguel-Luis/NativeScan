@@ -145,7 +145,7 @@ fun ReviewScreen(vm: ScanViewModel) {
                     tint = scheme.onPrimary, modifier = Modifier.size(18.dp),
                 )
                 Text(
-                    "Guardar ${format.name}",
+                    vm.exportProgress?.let { "Comprimiendo ${(it * 100).toInt()} %" } ?: "Guardar ${format.name}",
                     style = MaterialTheme.typography.labelMedium,
                     color = scheme.onPrimary,
                     maxLines = 1,
@@ -252,6 +252,9 @@ fun ReviewScreen(vm: ScanViewModel) {
                     selectedFormat = format,
                     onFormatSelected = { format = it },
                 )
+                if (format == ExportFormat.PDF) {
+                    PdfCompressionRow(selected = vm.pdfPreset, onSelected = vm::selectPdfPreset)
+                }
             }
         }
     }

@@ -34,6 +34,7 @@ import java.util.UUID
 import kotlin.math.max
 
 private const val KEY_LIBRARY_GRID = "library_grid"
+private const val KEY_PDF_PRESET = "pdf_preset"
 
 enum class Screen { LIBRARY, CAMERA, EDIT, REVIEW }
 
@@ -70,6 +71,18 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         libraryGrid = grid
         prefs.edit().putBoolean(KEY_LIBRARY_GRID, grid).apply()
     }
+
+    /** Compresión del PDF exportado; null = sin comprimir (render a 2000 px, PdfDocument). Persistida. */
+    var pdfPreset by mutableStateOf(PdfPreset.entries.getOrNull(prefs.getInt(KEY_PDF_PRESET, PdfPreset.BALANCED.ordinal)))
+        private set
+
+    fun selectPdfPreset(preset: PdfPreset?) {
+        pdfPreset = preset
+        prefs.edit().putInt(KEY_PDF_PRESET, preset?.ordinal ?: -1).apply()
+    }
+
+    /** Avance 0..1 de la compresión del PDF en curso; null si no hay. */
+    var exportProgress by mutableStateOf<Float?>(null); private set
 
     private val repo = DocumentRepository(app)
     private val exportDir = File(app.cacheDir, "exports").apply { mkdirs() }
@@ -351,11 +364,29 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                 val stamp = System.currentTimeMillis()
                 when (format) {
                     ExportFormat.PDF -> {
-                        val bitmaps = list.mapNotNull { render(it, PDF_MAX_SIDE) }
-                        try {
-                            listOf(Exporter.pdf(bitmaps, File(exportDir, "scan_$stamp.pdf")))
-                        } finally {
-                            bitmaps.forEach { it.recycle() }
+                        val out = File(exportDir, "scan_$stamp.pdf")
+                        val preset = pdfPreset
+                        if (preset == null) {
+                            val bitmaps = list.mapNotNull { render(it, PDF_MAX_SIDE) }
+                            try {
+                                listOf(Exporter.pdf(bitmaps, out))
+                            } finally {
+                                bitmaps.forEach { it.recycle() }
+                            }
+                        } else {
+                            val sources = list.map { p ->
+                                PdfCompressor.Page(bilevel = p.mode == NativeScanner.MODE_BW) { render(p) }
+                            }
+                            exportProgress = 0f
+                            try {
+                                listOfNotNull(
+                                    PdfCompressor.compress(sources, out, preset) { done, total ->
+                                        exportProgress = done / total.toFloat()
+                                    },
+                                )
+                            } finally {
+                                exportProgress = null
+                            }
                         }
                     }
                     else -> list.mapIndexedNotNull { i, p ->

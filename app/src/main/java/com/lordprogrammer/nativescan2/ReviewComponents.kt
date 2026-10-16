@@ -197,3 +197,34 @@ fun ExportSegmentedControl(
         }
     }
 }
+
+/** Selector de compresión del PDF: null = original (sin comprimir). */
+@Composable
+fun PdfCompressionRow(
+    selected: PdfPreset?,
+    onSelected: (PdfPreset?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val options: List<Pair<String, PdfPreset?>> =
+        listOf("Original" to null) + PdfPreset.entries.map { it.label to it }
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { (label, preset) ->
+            val on = preset == selected
+            Text(
+                label,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(CircleShape)
+                    .background(if (on) scheme.primaryContainer else scheme.surfaceContainerLow)
+                    .clickable { onSelected(preset) }
+                    .padding(vertical = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (on) scheme.primary else scheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}

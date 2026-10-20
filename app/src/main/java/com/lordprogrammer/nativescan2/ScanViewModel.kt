@@ -1,6 +1,8 @@
 package com.lordprogrammer.nativescan2
 
 import android.app.Application
+import android.content.ContentResolver
+import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
@@ -251,7 +253,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /** Foto JPEG de CameraX → archivo fuente derecho + detección de bordes y orientación. */
-    suspend fun addCapture(jpeg: ByteArray, rotation: Int) {
+    suspend fun addCapture(jpeg: ByteArray, rotation: Int, openEditor: Boolean = true) {
         busy = true
         try {
             val docId = documentId ?: UUID.randomUUID().toString()
@@ -274,10 +276,31 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             documentId = docId
             pages.add(page)
             selected = pages.lastIndex
-            screen = Screen.EDIT
+            if (openEditor) screen = Screen.EDIT
         } finally {
             busy = false
         }
+    }
+
+    /** Imágenes de la galería → mismo flujo que una captura; el usuario se queda en la revisión. */
+    suspend fun addFromGallery(resolver: ContentResolver, uris: List<Uri>) {
+        var firstNew = -1
+        for (uri in uris) {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { resolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            }
+            if (bytes == null) {
+                message = "No se pudo abrir la imagen"
+                continue
+            }
+            val rotation = runCatching { ExifInterface(ByteArrayInputStream(bytes)).rotationDegrees }
+                .getOrDefault(0)
+            val before = pages.size
+            runCatching { addCapture(bytes, rotation, openEditor = false) }
+                .onFailure { message = "Formato de imagen no compatible" }
+            if (firstNew < 0 && pages.size > before) firstNew = before
+        }
+        if (firstNew >= 0) select(firstNew)
     }
 
     /** Fuente decodificada; [maxSide] > 0 reduce con inSampleSize para ahorrar memoria. */

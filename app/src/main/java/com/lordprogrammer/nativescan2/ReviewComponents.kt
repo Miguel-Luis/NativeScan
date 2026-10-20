@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.RotateRight
+import androidx.compose.material.icons.rounded.AddAPhoto
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Check
@@ -55,6 +56,7 @@ fun DocumentQuickActionsBar(
     onAdjustBorders: () -> Unit,
     onDelete: () -> Unit,
     onAddPage: () -> Unit,
+    onAddFromGallery: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -72,7 +74,12 @@ fun DocumentQuickActionsBar(
             labelColor = scheme.error,
         )
         ToolButton(
-            Icons.Rounded.AddPhotoAlternate, "Agregar", onAddPage,
+            Icons.Rounded.AddAPhoto, "Cámara", onAddPage,
+            container = scheme.primaryContainer,
+            content = scheme.primary,
+        )
+        ToolButton(
+            Icons.Rounded.AddPhotoAlternate, "Galería", onAddFromGallery,
             container = scheme.primaryContainer,
             content = scheme.primary,
         )

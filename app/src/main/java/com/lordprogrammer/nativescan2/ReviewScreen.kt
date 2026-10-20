@@ -1,5 +1,8 @@
 package com.lordprogrammer.nativescan2
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -75,6 +78,11 @@ fun ReviewScreen(vm: ScanViewModel) {
     var format by rememberSaveable { mutableStateOf(ExportFormat.PDF) }
     val scheme = MaterialTheme.colorScheme
     val filter = DocumentFilter.fromMode(page.mode)
+    val galleryPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (uris.isNotEmpty()) scope.launch { vm.addFromGallery(context.contentResolver, uris) }
+    }
+    var showZoom by rememberSaveable { mutableStateOf(false) }
+    if (showZoom) PageZoomViewer(vm, index) { showZoom = false }
 
     val preview by rememberRendered(vm, page, ScanViewModel.PREVIEW_SIDE)
     // Con la página ya en pantalla, precalcula en nativo los demás filtros: el cambio es instantáneo.
@@ -167,6 +175,7 @@ fun ReviewScreen(vm: ScanViewModel) {
                     .shadow(8.dp, CardShape, ambientColor = scheme.primary, spotColor = scheme.primary)
                     .clip(CardShape)
                     .background(scheme.surfaceContainerLowest)
+                    .clickable(enabled = preview != null) { showZoom = true }
                     .padding(12.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -247,6 +256,9 @@ fun ReviewScreen(vm: ScanViewModel) {
                     onAdjustBorders = { vm.show(Screen.EDIT) },
                     onDelete = { vm.delete(index) },
                     onAddPage = { vm.show(Screen.CAMERA) },
+                    onAddFromGallery = {
+                        galleryPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
                 )
                 ExportSegmentedControl(
                     selectedFormat = format,

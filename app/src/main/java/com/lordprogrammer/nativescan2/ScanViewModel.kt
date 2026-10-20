@@ -371,23 +371,28 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Genera archivos de exportación en caché y los devuelve para compartir. */
-    suspend fun export(format: ExportFormat): List<File> = exportPages(pages.toList(), format)
+    suspend fun export(format: ExportFormat, fileName: String? = null): List<File> =
+        exportPages(pages.toList(), format, fileName)
 
     /** Exporta un documento guardado sin tocar la sesión abierta. */
-    suspend fun exportDocument(id: String, format: ExportFormat): List<File> {
+    suspend fun exportDocument(id: String, format: ExportFormat, fileName: String? = null): List<File> {
         val doc = repo.load(id) ?: return emptyList()
         val list = doc.pages.filter { File(it.sourcePath).exists() }.map { it.toScanPage() }
-        return exportPages(list, format)
+        return exportPages(list, format, fileName)
     }
 
-    private suspend fun exportPages(list: List<ScanPage>, format: ExportFormat): List<File> =
+    /** Nombre de archivo seguro: sin caracteres reservados; vacío → null (se usa el nombre por defecto). */
+    private fun safeFileName(name: String?): String? =
+        name?.replace(Regex("""[\\/:*?"<>|\p{Cntrl}]"""), "_")?.trim()?.trim('.')?.take(100)?.takeIf { it.isNotEmpty() }
+
+    private suspend fun exportPages(list: List<ScanPage>, format: ExportFormat, fileName: String?): List<File> =
         withContext(Dispatchers.Default) {
             busy = true
             try {
-                val stamp = System.currentTimeMillis()
+                val base = safeFileName(fileName) ?: "scan_${System.currentTimeMillis()}"
                 when (format) {
                     ExportFormat.PDF -> {
-                        val out = File(exportDir, "scan_$stamp.pdf")
+                        val out = File(exportDir, "$base.pdf")
                         val preset = pdfPreset
                         if (preset == null) {
                             val bitmaps = list.mapNotNull { render(it, PDF_MAX_SIDE) }
@@ -415,7 +420,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     else -> list.mapIndexedNotNull { i, p ->
                         val bmp = render(p) ?: return@mapIndexedNotNull null
                         try {
-                            Exporter.image(bmp, format, File(exportDir, "scan_${stamp}_${i + 1}.${format.ext}"), p.file)
+                            Exporter.image(bmp, format, File(exportDir, "${base}_${i + 1}.${format.ext}"), p.file)
                         } finally {
                             bmp.recycle()
                         }

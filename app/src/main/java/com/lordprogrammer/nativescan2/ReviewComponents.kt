@@ -23,7 +23,14 @@ import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -158,6 +165,35 @@ fun FilterSelectionRow(
             }
         }
     }
+}
+
+/** Diálogo con un campo de texto precargado; confirma con el texto recortado y no vacío. */
+@Composable
+fun TextPromptDialog(
+    title: String,
+    label: String,
+    initial: String,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+    suffix: String? = null,
+) {
+    var text by rememberSaveable { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = text, onValueChange = { text = it },
+                singleLine = true, label = { Text(label) },
+                suffix = suffix?.let { { Text(it) } },
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = text.isNotBlank(), onClick = { onConfirm(text.trim()) }) { Text(confirmLabel) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
 }
 
 /** Selector de formato en cápsula: segmento activo relleno con check. */

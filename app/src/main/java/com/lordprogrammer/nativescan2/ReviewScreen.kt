@@ -37,6 +37,8 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddAPhoto
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -81,6 +83,40 @@ fun ReviewScreen(vm: ScanViewModel) {
     val galleryPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
         if (uris.isNotEmpty()) scope.launch { vm.addFromGallery(context.contentResolver, uris) }
     }
+    val documents by vm.documents.collectAsState()
+    val docTitle = documents?.firstOrNull { it.id == vm.documentId }?.title ?: "Documento"
+    var showRename by rememberSaveable { mutableStateOf(false) }
+    var showSend by rememberSaveable { mutableStateOf(false) }
+    if (showRename) {
+        TextPromptDialog(
+            title = "Renombrar documento",
+            label = "Nombre",
+            initial = docTitle,
+            confirmLabel = "Guardar",
+            onDismiss = { showRename = false },
+            onConfirm = { name ->
+                vm.documentId?.let { vm.renameDocument(it, name) }
+                showRename = false
+            },
+        )
+    }
+    if (showSend) {
+        TextPromptDialog(
+            title = "Enviar documento",
+            label = "Nombre del archivo",
+            initial = docTitle,
+            confirmLabel = "Enviar",
+            suffix = ".${format.ext}",
+            onDismiss = { showSend = false },
+            onConfirm = { name ->
+                showSend = false
+                scope.launch {
+                    val files = vm.export(format, name)
+                    if (files.isNotEmpty()) Exporter.share(context, files, format.mime)
+                }
+            },
+        )
+    }
     var showZoom by rememberSaveable { mutableStateOf(false) }
     if (showZoom) PageZoomViewer(vm, index) { showZoom = false }
 
@@ -99,13 +135,25 @@ fun ReviewScreen(vm: ScanViewModel) {
             IconButton(onClick = { vm.closeDocument() }) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Atrás")
             }
-            Text(
-                "Editor y filtros",
-                style = MaterialTheme.typography.titleMedium,
-                color = scheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(Modifier.weight(1f).clickable { showRename = true }) {
+                Text(
+                    "Editor y filtros",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = scheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    docTitle,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = scheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(onClick = { showRename = true }) {
+                Icon(Icons.Rounded.Edit, contentDescription = "Renombrar documento", tint = scheme.primary)
+            }
         }
         if (vm.busy) LinearProgressIndicator(Modifier.fillMaxWidth()) else Box(Modifier.height(4.dp))
 
@@ -138,12 +186,7 @@ fun ReviewScreen(vm: ScanViewModel) {
                 Modifier
                     .clip(CircleShape)
                     .background(if (vm.busy) scheme.primary.copy(alpha = 0.5f) else scheme.primary)
-                    .clickable(enabled = !vm.busy) {
-                        scope.launch {
-                            val files = vm.export(format)
-                            if (files.isNotEmpty()) Exporter.share(context, files, format.mime)
-                        }
-                    }
+                    .clickable(enabled = !vm.busy) { showSend = true }
                     .padding(horizontal = 14.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,

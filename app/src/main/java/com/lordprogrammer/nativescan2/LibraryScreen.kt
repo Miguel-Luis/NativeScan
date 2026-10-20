@@ -96,7 +96,7 @@ fun LibraryScreen(vm: ScanViewModel) {
     val scope = rememberCoroutineScope()
     fun shareDoc(doc: DocumentEntity) {
         scope.launch {
-            val files = vm.exportDocument(doc.id, ExportFormat.PDF)
+            val files = vm.exportDocument(doc.id, ExportFormat.PDF, doc.title)
             if (files.isNotEmpty()) Exporter.share(context, files, ExportFormat.PDF.mime)
             else vm.message = "No se pudo exportar el documento"
         }

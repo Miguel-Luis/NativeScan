@@ -1,9 +1,12 @@
 package com.lordprogrammer.nativescan2
 
 import android.graphics.BitmapFactory
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +43,8 @@ import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.ViewAgenda
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ElevatedCard
@@ -69,8 +74,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -103,29 +110,85 @@ fun LibraryScreen(vm: ScanViewModel) {
     }
     var query by rememberSaveable { mutableStateOf("") }
     val gridView = vm.libraryGrid
+    val haptic = LocalHapticFeedback.current
+
+    // Selección múltiple: se activa con pulsación larga y termina al quedar vacía.
+    var selection by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var confirmBulkDelete by remember { mutableStateOf(false) }
+    val chosen = documents.orEmpty().filter { it.id in selection }
+    val selecting = chosen.isNotEmpty()
+    BackHandler(enabled = selecting) { selection = emptySet() }
+    fun toggle(id: String) {
+        selection = if (id in selection) selection - id else selection + id
+    }
+    fun longPress(id: String) {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        toggle(id)
+    }
+    fun shareChosen() {
+        scope.launch {
+            val files = vm.exportDocuments(chosen)
+            if (files.isNotEmpty()) Exporter.share(context, files, ExportFormat.PDF.mime)
+            else vm.message = "No se pudo exportar los documentos"
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
+            if (selecting) {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { selection = emptySet() }) {
+                            Icon(Icons.Rounded.Close, contentDescription = "Cancelar selección")
+                        }
+                    },
+                    title = {
                         Text(
-                            "NativeScan",
-                            style = MaterialTheme.typography.titleLarge,
+                            if (chosen.size == 1) "1 seleccionado" else "${chosen.size} seleccionados",
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary,
                         )
-                        Text(
-                            "DOCUMENTOS",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-            )
+                    },
+                    actions = {
+                        IconButton(enabled = !vm.busy, onClick = ::shareChosen) {
+                            Icon(
+                                Icons.Rounded.Share, contentDescription = "Enviar seleccionados",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        IconButton(enabled = !vm.busy, onClick = { confirmBulkDelete = true }) {
+                            Icon(
+                                Icons.Rounded.DeleteOutline, contentDescription = "Eliminar seleccionados",
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    },
+                )
+            } else {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                "NativeScan",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                "DOCUMENTOS",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                )
+            }
         },
-        bottomBar = { ScanBottomBar(showDocs = false, showScan = true, onDocs = {}, onScan = vm::startNewScan) },
+        bottomBar = {
+            if (!selecting) ScanBottomBar(showDocs = false, showScan = true, onDocs = {}, onScan = vm::startNewScan)
+        },
     ) { padding ->
         val docs = documents
         when {
@@ -147,12 +210,24 @@ fun LibraryScreen(vm: ScanViewModel) {
                     }
                 }
                 Column(Modifier.fillMaxSize().padding(padding)) {
-                    SearchBar(
-                        query = query,
-                        onQuery = { query = it },
-                        gridView = gridView,
-                        onGrid = vm::selectLibraryGrid,
-                    )
+                    if (vm.busy && selecting) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (selecting) {
+                        val allSelected = visible.isNotEmpty() && visible.all { it.id in selection }
+                        SelectAllRow(
+                            allSelected = allSelected,
+                            onToggle = {
+                                selection = if (allSelected) selection - visible.map { it.id }.toSet()
+                                else selection + visible.map { it.id }
+                            },
+                        )
+                    } else {
+                        SearchBar(
+                            query = query,
+                            onQuery = { query = it },
+                            gridView = gridView,
+                            onGrid = vm::selectLibraryGrid,
+                        )
+                    }
                     if (visible.isEmpty()) {
                         Box(Modifier.fillMaxSize(), Alignment.Center) {
                             Text(
@@ -172,7 +247,10 @@ fun LibraryScreen(vm: ScanViewModel) {
                             items(visible, key = { it.id }) { doc ->
                                 DocumentCard(
                                     doc,
-                                    onClick = { vm.openDocument(doc.id) },
+                                    selecting = selecting,
+                                    selected = doc.id in selection,
+                                    onClick = { if (selecting) toggle(doc.id) else vm.openDocument(doc.id) },
+                                    onLongClick = { longPress(doc.id) },
                                     onShare = { shareDoc(doc) },
                                     onRename = { toRename = doc },
                                     onDelete = { toDelete = doc },
@@ -188,7 +266,10 @@ fun LibraryScreen(vm: ScanViewModel) {
                             items(visible, key = { it.id }) { doc ->
                                 DocumentRow(
                                     doc,
-                                    onClick = { vm.openDocument(doc.id) },
+                                    selecting = selecting,
+                                    selected = doc.id in selection,
+                                    onClick = { if (selecting) toggle(doc.id) else vm.openDocument(doc.id) },
+                                    onLongClick = { longPress(doc.id) },
                                     onShare = { shareDoc(doc) },
                                     onRename = { toRename = doc },
                                     onDelete = { toDelete = doc },
@@ -219,6 +300,28 @@ fun LibraryScreen(vm: ScanViewModel) {
                 }) { Text("Guardar") }
             },
             dismissButton = { TextButton(onClick = { toRename = null }) { Text("Cancelar") } },
+        )
+    }
+
+    if (confirmBulkDelete && chosen.isNotEmpty()) {
+        val pages = chosen.sumOf { it.pageCount }
+        AlertDialog(
+            onDismissRequest = { confirmBulkDelete = false },
+            title = { Text(if (chosen.size == 1) "Eliminar documento" else "Eliminar ${chosen.size} documentos") },
+            text = {
+                Text(
+                    (if (chosen.size == 1) "«${chosen[0].title}»" else "Los ${chosen.size} documentos seleccionados") +
+                        " y sus $pages páginas se borrarán del dispositivo. Esta acción no se puede deshacer.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteDocuments(chosen.map { it.id })
+                    selection = emptySet()
+                    confirmBulkDelete = false
+                }) { Text("Eliminar", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmBulkDelete = false }) { Text("Cancelar") } },
         )
     }
 
@@ -479,7 +582,10 @@ private fun rememberDate(updatedAt: Long): String = remember(updatedAt) {
 @Composable
 private fun DocumentCard(
     doc: DocumentEntity,
+    selecting: Boolean,
+    selected: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onShare: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -488,7 +594,10 @@ private fun DocumentCard(
     val cover by rememberThumbnail(doc.coverThumbnailPath)
 
     ElevatedCard(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectionBorder(selected)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = CardShape,
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
     ) {
@@ -502,6 +611,7 @@ private fun DocumentCard(
                 Image(it, doc.title, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             }
             PageBadge(doc.pageCount, Modifier.align(Alignment.BottomEnd))
+            if (selecting) SelectCheck(selected, Modifier.align(Alignment.TopStart))
         }
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, bottom = 8.dp),
@@ -521,7 +631,8 @@ private fun DocumentCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            DocumentMenu(doc.title, onShare, onRename, onDelete)
+            if (!selecting) DocumentMenu(doc.title, onShare, onRename, onDelete)
+            else Spacer(Modifier.height(48.dp))
         }
     }
 }
@@ -529,7 +640,10 @@ private fun DocumentCard(
 @Composable
 private fun DocumentRow(
     doc: DocumentEntity,
+    selecting: Boolean,
+    selected: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onShare: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -538,7 +652,10 @@ private fun DocumentRow(
     val cover by rememberThumbnail(doc.coverThumbnailPath)
 
     ElevatedCard(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectionBorder(selected)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = CardShape,
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
     ) {
@@ -547,6 +664,7 @@ private fun DocumentRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (selecting) SelectCheck(selected)
             Box(
                 Modifier
                     .size(width = 64.dp, height = 80.dp)
@@ -573,8 +691,50 @@ private fun DocumentRow(
                 Spacer(Modifier.height(4.dp))
                 PageBadge(doc.pageCount)
             }
-            DocumentMenu(doc.title, onShare, onRename, onDelete)
+            if (!selecting) DocumentMenu(doc.title, onShare, onRename, onDelete)
         }
+    }
+}
+
+/** Marco de acento sobre la tarjeta seleccionada. */
+@Composable
+private fun Modifier.selectionBorder(selected: Boolean): Modifier =
+    if (selected) border(2.dp, MaterialTheme.colorScheme.primary, CardShape) else this
+
+/** Checkbox de solo lectura: el toque lo recibe la tarjeta. */
+@Composable
+private fun SelectCheck(checked: Boolean, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.9f))
+            .padding(4.dp),
+    ) {
+        Checkbox(checked = checked, onCheckedChange = null)
+    }
+}
+
+/** Fila superior del modo selección: marca o desmarca todos los documentos visibles. */
+@Composable
+private fun SelectAllRow(allSelected: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .padding(start = 16.dp, end = 16.dp, top = 4.dp)
+            .fillMaxWidth()
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Checkbox(checked = allSelected, onCheckedChange = null)
+        Text(
+            if (allSelected) "Deseleccionar todos" else "Seleccionar todos",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 

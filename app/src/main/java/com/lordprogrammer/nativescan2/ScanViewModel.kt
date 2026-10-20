@@ -157,6 +157,19 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.deleteDocument(id) }
     }
 
+    fun deleteDocuments(ids: List<String>) {
+        viewModelScope.launch { ids.forEach { repo.deleteDocument(it) } }
+    }
+
+    /** PDF de cada documento, con su título como nombre; títulos repetidos reciben " (2)", " (3)"... */
+    suspend fun exportDocuments(docs: List<DocumentEntity>): List<File> {
+        val used = mutableMapOf<String, Int>()
+        return docs.flatMap { doc ->
+            val n = used.merge(doc.title.lowercase(), 1, Int::plus)!!
+            exportDocument(doc.id, ExportFormat.PDF, if (n == 1) doc.title else "${doc.title} ($n)")
+        }
+    }
+
     fun show(s: Screen) {
         screen = s
     }
